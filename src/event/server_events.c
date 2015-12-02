@@ -32,7 +32,7 @@
  *
  */
 
-#include "config.h"
+#include "prof_config.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -45,14 +45,15 @@
 #include "config/account.h"
 #include "config/scripts.h"
 #include "roster_list.h"
+#include "plugins/plugins.h"
 #include "window_list.h"
 #include "config/tlscerts.h"
 #include "profanity.h"
 
-#ifdef HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBOTR
 #include "otr/otr.h"
 #endif
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
 #include "pgp/gpg.h"
 #endif
 
@@ -62,12 +63,11 @@ void
 sv_ev_login_account_success(char *account_name, int secured)
 {
     ProfAccount *account = accounts_get_account(account_name);
-
-#ifdef HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBOTR
     otr_on_connect(account);
 #endif
 
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
     p_gpg_on_connect(account->jid);
 #endif
 
@@ -110,7 +110,7 @@ sv_ev_lost_connection(void)
     muc_invites_clear();
     chat_sessions_clear();
     ui_disconnected();
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
     p_gpg_on_disconnect();
 #endif
 }
@@ -163,7 +163,10 @@ sv_ev_room_history(const char *const room_jid, const char *const nick,
 {
     ProfMucWin *mucwin = wins_get_muc(room_jid);
     if (mucwin) {
-        mucwin_history(mucwin, nick, timestamp, message);
+        char *new_message = plugins_pre_room_message_display(room_jid, nick, message);
+        mucwin_history(mucwin, nick, timestamp, new_message);
+        plugins_post_room_message_display(room_jid, nick, new_message);
+        free(new_message);
     }
 }
 
@@ -173,7 +176,10 @@ sv_ev_room_message(const char *const room_jid, const char *const nick,
 {
     ProfMucWin *mucwin = wins_get_muc(room_jid);
     if (mucwin) {
-        mucwin_message(mucwin, nick, message);
+        char *new_message = plugins_pre_room_message_display(room_jid, nick, message);
+        mucwin_message(mucwin, nick, new_message);
+        plugins_post_room_message_display(room_jid, nick, new_message);
+        free(new_message);
     }
 
     if (prefs_get_boolean(PREF_GRLOG)) {
@@ -181,28 +187,41 @@ sv_ev_room_message(const char *const room_jid, const char *const nick,
         groupchat_log_chat(jid->barejid, room_jid, nick, message);
         jid_destroy(jid);
     }
+
 }
 
 void
 sv_ev_incoming_private_message(const char *const fulljid, char *message)
 {
+    char *plugin_message =  plugins_pre_priv_message_display(fulljid, message);
+
     ProfPrivateWin *privatewin = wins_get_private(fulljid);
     if (privatewin == NULL) {
         ProfWin *window = wins_new_private(fulljid);
         privatewin = (ProfPrivateWin*)window;
     }
-    privwin_incoming_msg(privatewin, message, NULL);
+    privwin_incoming_msg(privatewin, plugin_message, NULL);
+
+    plugins_post_priv_message_display(fulljid, plugin_message);
+
+    free(plugin_message);
 }
 
 void
 sv_ev_delayed_private_message(const char *const fulljid, char *message, GDateTime *timestamp)
 {
+    char *new_message = plugins_pre_priv_message_display(fulljid, message);
+
     ProfPrivateWin *privatewin = wins_get_private(fulljid);
     if (privatewin == NULL) {
         ProfWin *window = wins_new_private(fulljid);
         privatewin = (ProfPrivateWin*)window;
     }
-    privwin_incoming_msg(privatewin, message, timestamp);
+    privwin_incoming_msg(privatewin, new_message, timestamp);
+
+    plugins_post_priv_message_display(fulljid, new_message);
+
+    free(new_message);
 }
 
 void
@@ -233,7 +252,7 @@ sv_ev_incoming_carbon(char *barejid, char *resource, char *message)
     chat_log_msg_in(barejid, message, NULL);
 }
 
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
 static void
 _sv_ev_incoming_pgp(ProfChatWin *chatwin, gboolean new_win, char *barejid, char *resource, char *message, char *pgp_message, GDateTime *timestamp)
 {
@@ -251,7 +270,7 @@ _sv_ev_incoming_pgp(ProfChatWin *chatwin, gboolean new_win, char *barejid, char 
 }
 #endif
 
-#ifdef HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBOTR
 static void
 _sv_ev_incoming_otr(ProfChatWin *chatwin, gboolean new_win, char *barejid, char *resource, char *message, GDateTime *timestamp)
 {
@@ -271,7 +290,7 @@ _sv_ev_incoming_otr(ProfChatWin *chatwin, gboolean new_win, char *barejid, char 
 }
 #endif
 
-#ifndef HAVE_LIBOTR
+#ifndef PROF_HAVE_LIBOTR
 static void
 _sv_ev_incoming_plain(ProfChatWin *chatwin, gboolean new_win, char *barejid, char *resource, char *message, GDateTime *timestamp)
 {
@@ -293,8 +312,8 @@ sv_ev_incoming_message(char *barejid, char *resource, char *message, char *pgp_m
     }
 
 // OTR suported, PGP supported
-#ifdef HAVE_LIBOTR
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBGPGME
     if (pgp_message) {
         if (chatwin->is_otr) {
             win_println((ProfWin*)chatwin, 0, "PGP encrypted message received whilst in OTR session.");
@@ -309,16 +328,16 @@ sv_ev_incoming_message(char *barejid, char *resource, char *message, char *pgp_m
 #endif
 
 // OTR supported, PGP unsupported
-#ifdef HAVE_LIBOTR
-#ifndef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBOTR
+#ifndef PROF_HAVE_LIBGPGME
     _sv_ev_incoming_otr(chatwin, new_win, barejid, resource, message, timestamp);
     return;
 #endif
 #endif
 
 // OTR unsupported, PGP supported
-#ifndef HAVE_LIBOTR
-#ifdef HAVE_LIBGPGME
+#ifndef PROF_HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBGPGME
     if (pgp_message) {
         _sv_ev_incoming_pgp(chatwin, new_win, barejid, resource, message, pgp_message, timestamp);
     } else {
@@ -329,8 +348,8 @@ sv_ev_incoming_message(char *barejid, char *resource, char *message, char *pgp_m
 #endif
 
 // OTR unsupported, PGP unsupported
-#ifndef HAVE_LIBOTR
-#ifndef HAVE_LIBGPGME
+#ifndef PROF_HAVE_LIBOTR
+#ifndef PROF_HAVE_LIBGPGME
     _sv_ev_incoming_plain(chatwin, new_win, barejid, resource, message, timestamp);
     return;
 #endif
@@ -454,7 +473,7 @@ sv_ev_contact_online(char *barejid, Resource *resource, GDateTime *last_activity
         ui_contact_online(barejid, resource, last_activity);
     }
 
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
     if (pgpsig) {
         p_gpg_verify(barejid, pgpsig);
     }

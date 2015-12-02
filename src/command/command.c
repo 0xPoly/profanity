@@ -32,7 +32,7 @@
  *
  */
 
-#include "config.h"
+#include "prof_config.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -58,10 +58,11 @@
 #include "xmpp/form.h"
 #include "log.h"
 #include "muc.h"
-#ifdef HAVE_LIBOTR
+#include "plugins/plugins.h"
+#ifdef PROF_HAVE_LIBOTR
 #include "otr/otr.h"
 #endif
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
 #include "pgp/gpg.h"
 #endif
 #include "profanity.h"
@@ -1619,6 +1620,17 @@ static struct cmd_t command_defs[] =
             "/account rename me gtalk")
     },
 
+    { "/plugins",
+        cmd_plugins, parse_args, 0, 0, NULL,
+        CMD_NOTAGS
+        CMD_SYN(
+            "/plugins")
+        CMD_DESC(
+            "Show currently installed plugins. ")
+        CMD_NOARGS
+        CMD_NOEXAMPLES
+    },
+
     { "/prefs",
         cmd_prefs, parse_args, 0, 1, NULL,
         CMD_NOTAGS
@@ -2451,7 +2463,7 @@ cmd_exists(char *cmd)
 }
 
 void
-cmd_autocomplete_add(char *value)
+cmd_autocomplete_add(const char *const value)
 {
     if (commands_ac) {
         autocomplete_add(commands_ac, value);
@@ -2497,7 +2509,7 @@ cmd_autocomplete_remove_form_fields(DataForm *form)
 }
 
 void
-cmd_autocomplete_remove(char *value)
+cmd_autocomplete_remove(const char *const value)
 {
     if (commands_ac) {
         autocomplete_remove(commands_ac, value);
@@ -2553,7 +2565,7 @@ cmd_reset_autocomplete(ProfWin *window)
     tlscerts_reset_ac();
     prefs_reset_boolean_choice();
     presence_reset_sub_request_search();
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
     p_gpg_autocomplete_key_reset();
 #endif
     autocomplete_reset(help_ac);
@@ -2662,6 +2674,7 @@ cmd_reset_autocomplete(ProfWin *window)
 
     bookmark_autocomplete_reset();
     prefs_reset_room_trigger_ac();
+    plugins_reset_autocomplete();
 }
 
 gboolean
@@ -2763,6 +2776,8 @@ _cmd_execute(ProfWin *window, const char *const command, const char *const inp)
             g_strfreev(args);
             return result;
         }
+    } else if (plugins_run_command(inp)) {
+        return TRUE;
     } else {
         gboolean ran_alias = FALSE;
         gboolean alias_result = cmd_execute_alias(window, inp, &ran_alias);
@@ -2916,6 +2931,11 @@ _cmd_complete_parameters(ProfWin *window, const char *const input)
     }
     g_hash_table_destroy(ac_funcs);
 
+    result = plugins_autocomplete(input);
+    if (result) {
+        return result;
+    }
+
     if (g_str_has_prefix(input, "/field")) {
         result = _form_field_autocomplete(window, input);
         if (result) {
@@ -2975,7 +2995,7 @@ _who_autocomplete(ProfWin *window, const char *const input)
         }
     }
 
-    return NULL;
+    return result;
 }
 
 static char*
@@ -3361,7 +3381,7 @@ _pgp_autocomplete(ProfWin *window, const char *const input)
         return found;
     }
 
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
     gboolean result;
     gchar **args = parse_args(input, 2, 3, &result);
     if ((strncmp(input, "/pgp", 4) == 0) && (result == TRUE)) {
@@ -4208,7 +4228,7 @@ _account_autocomplete(ProfWin *window, const char *const input)
                 g_strfreev(args);
                 return found;
             }
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
         } else if ((g_strv_length(args) > 3) && (g_strcmp0(args[2], "pgpkeyid")) == 0) {
             g_string_append(beginning, " ");
             g_string_append(beginning, args[2]);

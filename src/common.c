@@ -31,7 +31,7 @@
  * source files in the program, then also delete it here.
  *
  */
-#include "config.h"
+#include "prof_config.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -44,6 +44,12 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <glib.h>
+
+#ifdef PROF_HAVE_NCURSESW_NCURSES_H
+#include <ncursesw/ncurses.h>
+#elif PROF_HAVE_NCURSES_H
+#include <ncurses.h>
+#endif
 
 #include "tools/p_sha1.h"
 
@@ -340,7 +346,7 @@ release_is_new(char *found_version)
 {
     int curr_maj, curr_min, curr_patch, found_maj, found_min, found_patch;
 
-    int parse_curr = sscanf(PACKAGE_VERSION, "%d.%d.%d", &curr_maj, &curr_min,
+    int parse_curr = sscanf(PROF_PACKAGE_VERSION, "%d.%d.%d", &curr_maj, &curr_min,
         &curr_patch);
     int parse_found = sscanf(found_version, "%d.%d.%d", &found_maj, &found_min,
         &found_patch);
@@ -650,10 +656,10 @@ is_notify_enabled(void)
 {
     gboolean notify_enabled = FALSE;
 
-#ifdef HAVE_OSXNOTIFY
+#ifdef PROF_HAVE_OSXNOTIFY
     notify_enabled = TRUE;
 #endif
-#ifdef HAVE_LIBNOTIFY
+#ifdef PROF_HAVE_LIBNOTIFY
     notify_enabled = TRUE;
 #endif
 #ifdef PLATFORM_CYGWIN

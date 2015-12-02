@@ -32,7 +32,7 @@
  *
  */
 
-#include "config.h"
+#include "prof_config.h"
 
 #include <assert.h>
 #include <stdlib.h>
@@ -40,14 +40,15 @@
 
 #include <glib.h>
 
-#ifdef HAVE_LIBMESODE
+#ifdef PROF_HAVE_LIBMESODE
 #include <mesode.h>
 #endif
-#ifdef HAVE_LIBSTROPHE
+#ifdef PROF_HAVE_LIBSTROPHE
 #include <strophe.h>
 #endif
 
 #include "log.h"
+#include "plugins/plugins.h"
 #include "profanity.h"
 #include "ui/ui.h"
 #include "event/server_events.h"
@@ -364,6 +365,9 @@ _roster_result_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, voi
     } else {
         cl_ev_presence_send(conn_presence, NULL, 0);
     }
+
+    const char *fulljid = jabber_get_fulljid();
+    plugins_on_connect(account, fulljid);
 
     return 1;
 }

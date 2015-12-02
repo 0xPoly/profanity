@@ -32,7 +32,7 @@
  *
  */
 
-#include "config.h"
+#include "prof_config.h"
 
 #include <stdlib.h>
 #include <glib.h>
@@ -41,10 +41,11 @@
 #include "ui/ui.h"
 #include "window_list.h"
 #include "xmpp/xmpp.h"
-#ifdef HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBOTR
 #include "otr/otr.h"
 #endif
-#ifdef HAVE_LIBGPGME
+#include "plugins/plugins.h"
+#ifdef PROF_HAVE_LIBGPGME
 #include "pgp/gpg.h"
 #endif
 
@@ -70,7 +71,7 @@ cl_ev_presence_send(const resource_presence_t presence_type, const char *const m
 {
     char *signed_status = NULL;
 
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBGPGME
     char *account_name = jabber_get_account_name();
     ProfAccount *account = accounts_get_account(account_name);
     if (account->pgp_keyid) {
@@ -88,21 +89,22 @@ void
 cl_ev_send_msg(ProfChatWin *chatwin, const char *const msg)
 {
     chat_state_active(chatwin->state);
+    char *plugin_msg = plugins_pre_chat_message_send(chatwin->barejid, msg);
 
 // OTR suported, PGP supported
-#ifdef HAVE_LIBOTR
-#ifdef HAVE_LIBGPGME
+#ifdef PROF_HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBGPGME
     if (chatwin->pgp_send) {
-        char *id = message_send_chat_pgp(chatwin->barejid, msg);
-        chat_log_pgp_msg_out(chatwin->barejid, msg);
-        chatwin_outgoing_msg(chatwin, msg, id, PROF_MSG_PGP);
+        char *id = message_send_chat_pgp(chatwin->barejid, plugin_msg);
+        chat_log_pgp_msg_out(chatwin->barejid, plugin_msg);
+        chatwin_outgoing_msg(chatwin, plugin_msg, id, PROF_MSG_PGP);
         free(id);
     } else {
-        gboolean handled = otr_on_message_send(chatwin, msg);
+        gboolean handled = otr_on_message_send(chatwin, plugin_msg);
         if (!handled) {
-            char *id = message_send_chat(chatwin->barejid, msg);
-            chat_log_msg_out(chatwin->barejid, msg);
-            chatwin_outgoing_msg(chatwin, msg, id, PROF_MSG_PLAIN);
+            char *id = message_send_chat(chatwin->barejid, plugin_msg);
+            chat_log_msg_out(chatwin->barejid, plugin_msg);
+            chatwin_outgoing_msg(chatwin, plugin_msg, id, PROF_MSG_PLAIN);
             free(id);
         }
     }
@@ -111,13 +113,13 @@ cl_ev_send_msg(ProfChatWin *chatwin, const char *const msg)
 #endif
 
 // OTR supported, PGP unsupported
-#ifdef HAVE_LIBOTR
-#ifndef HAVE_LIBGPGME
-    gboolean handled = otr_on_message_send(chatwin, msg);
+#ifdef PROF_HAVE_LIBOTR
+#ifndef PROF_HAVE_LIBGPGME
+    gboolean handled = otr_on_message_send(chatwin, plugin_msg);
     if (!handled) {
-        char *id = message_send_chat(chatwin->barejid, msg);
-        chat_log_msg_out(chatwin->barejid, msg);
-        chatwin_outgoing_msg(chatwin, msg, id, PROF_MSG_PLAIN);
+        char *id = message_send_chat(chatwin->barejid, plugin_msg);
+        chat_log_msg_out(chatwin->barejid, plugin_msg);
+        chatwin_outgoing_msg(chatwin, plugin_msg, id, PROF_MSG_PLAIN);
         free(id);
     }
     return;
@@ -125,17 +127,17 @@ cl_ev_send_msg(ProfChatWin *chatwin, const char *const msg)
 #endif
 
 // OTR unsupported, PGP supported
-#ifndef HAVE_LIBOTR
-#ifdef HAVE_LIBGPGME
+#ifndef PROF_HAVE_LIBOTR
+#ifdef PROF_HAVE_LIBGPGME
     if (chatwin->pgp_send) {
-        char *id = message_send_chat_pgp(chatwin->barejid, msg);
-        chat_log_pgp_msg_out(chatwin->barejid, msg);
-        chatwin_outgoing_msg(chatwin, msg, id, PROF_MSG_PGP);
+        char *id = message_send_chat_pgp(chatwin->barejid, plugin_msg);
+        chat_log_pgp_msg_out(chatwin->barejid, plugin_msg);
+        chatwin_outgoing_msg(chatwin, plugin_msg, id, PROF_MSG_PGP);
         free(id);
     } else {
-        char *id = message_send_chat(chatwin->barejid, msg);
-        chat_log_msg_out(chatwin->barejid, msg);
-        chatwin_outgoing_msg(chatwin, msg, id, PROF_MSG_PLAIN);
+        char *id = message_send_chat(chatwin->barejid, plugin_msg);
+        chat_log_msg_out(chatwin->barejid, plugin_msg);
+        chatwin_outgoing_msg(chatwin, plugin_msg, id, PROF_MSG_PLAIN);
         free(id);
     }
     return;
@@ -143,26 +145,39 @@ cl_ev_send_msg(ProfChatWin *chatwin, const char *const msg)
 #endif
 
 // OTR unsupported, PGP unsupported
-#ifndef HAVE_LIBOTR
-#ifndef HAVE_LIBGPGME
-    char *id = message_send_chat(chatwin->barejid, msg);
-    chat_log_msg_out(chatwin->barejid, msg);
-    chatwin_outgoing_msg(chatwin, msg, id, PROF_MSG_PLAIN);
+#ifndef PROF_HAVE_LIBOTR
+#ifndef PROF_HAVE_LIBGPGME
+    char *id = message_send_chat(chatwin->barejid, plugin_msg);
+    chat_log_msg_out(chatwin->barejid, plugin_msg);
+    chatwin_outgoing_msg(chatwin, plugin_msg, id, PROF_MSG_PLAIN);
     free(id);
     return;
 #endif
 #endif
+
+    plugins_post_chat_message_send(chatwin->barejid, plugin_msg);
+    free(plugin_msg);
 }
 
 void
 cl_ev_send_muc_msg(ProfMucWin *mucwin, const char *const msg)
 {
-    message_send_groupchat(mucwin->roomjid, msg);
+    char *plugin_msg = plugins_pre_room_message_send(mucwin->roomjid, msg);
+
+    message_send_groupchat(mucwin->roomjid, plugin_msg);
+
+    plugins_post_room_message_send(mucwin->roomjid, plugin_msg);
+    free(plugin_msg);
 }
 
 void
 cl_ev_send_priv_msg(ProfPrivateWin *privwin, const char *const msg)
 {
-    message_send_private(privwin->fulljid, msg);
-    privwin_outgoing_msg(privwin, msg);
+    char *plugin_msg = plugins_pre_priv_message_send(privwin->fulljid, msg);
+
+    message_send_private(privwin->fulljid, plugin_msg);
+    privwin_outgoing_msg(privwin, plugin_msg);
+
+    plugins_post_priv_message_send(privwin->fulljid, plugin_msg);
+    free(plugin_msg);
 }
