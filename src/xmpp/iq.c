@@ -93,10 +93,13 @@ static int _room_kick_result_handler(xmpp_conn_t *const conn, xmpp_stanza_t *con
 static int _enable_carbons_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata);
 static int _disable_carbons_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata);
 static int _manual_pong_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata);
-static int _ping_timed_handler(xmpp_conn_t *const conn, void *const userdata);
+static int _autoping_timed_handler(xmpp_conn_t *const conn, void *const userdata);
 static int _caps_response_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata);
 static int _caps_response_handler_for_jid(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata);
 static int _caps_response_handler_legacy(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata);
+
+static gboolean autoping_wait = FALSE;
+static GTimer *autoping_time;
 
 void
 iq_add_handlers(void)
@@ -119,25 +122,50 @@ iq_add_handlers(void)
 
     if (prefs_get_autoping() != 0) {
         int millis = prefs_get_autoping() * 1000;
-        xmpp_timed_handler_add(conn, _ping_timed_handler, millis, ctx);
+        xmpp_timed_handler_add(conn, _autoping_timed_handler, millis, ctx);
+    }
+}
+
+void
+iq_autoping_check(void)
+{
+    if (jabber_get_connection_status() != JABBER_CONNECTED) {
+        return;
+    }
+
+    if (autoping_wait == FALSE) {
+        return;
+    }
+
+    gdouble elapsed = g_timer_elapsed(autoping_time, NULL);
+    unsigned long seconds_elapsed = elapsed * 1.0;
+    gint timeout = prefs_get_autoping_timeout();
+    if (timeout > 0 && seconds_elapsed >= timeout) {
+        cons_show("Autoping response timed out afer %u seconds.", timeout);
+        log_debug("Autoping check: timed out afer %u seconds, disconnecting", timeout);
+        jabber_autoping_fail();
+        autoping_wait = FALSE;
+        g_timer_destroy(autoping_time);
     }
 }
 
 void
 iq_set_autoping(const int seconds)
 {
-    xmpp_conn_t * const conn = connection_get_conn();
-    xmpp_ctx_t * const ctx = connection_get_ctx();
-
-    if (jabber_get_connection_status() == JABBER_CONNECTED) {
-        xmpp_timed_handler_delete(conn, _ping_timed_handler);
-
-        if (seconds != 0) {
-            int millis = seconds * 1000;
-            xmpp_timed_handler_add(conn, _ping_timed_handler, millis,
-                ctx);
-        }
+    if (jabber_get_connection_status() != JABBER_CONNECTED) {
+        return;
     }
+
+    xmpp_conn_t * const conn = connection_get_conn();
+    xmpp_timed_handler_delete(conn, _autoping_timed_handler);
+
+    if (seconds == 0) {
+        return;
+    }
+
+    int millis = seconds * 1000;
+    xmpp_ctx_t * const ctx = connection_get_ctx();
+    xmpp_timed_handler_add(conn, _autoping_timed_handler, millis, ctx);
 }
 
 void
@@ -522,42 +550,48 @@ _error_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza,
 }
 
 static int
-_pong_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza,
-    void *const userdata)
+_auto_pong_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza, void *const userdata)
 {
+    autoping_wait = FALSE;
+    g_timer_destroy(autoping_time);
+
     char *id = xmpp_stanza_get_id(stanza);
+    if (id == NULL) {
+        log_debug("Autoping: Pong handler fired.");
+        return 0;
+    }
+
+    log_debug("Autoping: Pong handler fired: %s.", id);
+
     char *type = xmpp_stanza_get_type(stanza);
-
-    if (id) {
-        log_debug("IQ pong handler fired, id: %s.", id);
-    } else {
-        log_debug("IQ pong handler fired.");
+    if (type == NULL) {
+        return 0;
+    }
+    if (g_strcmp0(type, STANZA_TYPE_ERROR) != 0) {
+        return 0;
     }
 
-    if (id && type) {
-        // show warning if error
-        if (strcmp(type, STANZA_TYPE_ERROR) == 0) {
-            char *error_msg = stanza_get_error_message(stanza);
-            log_warning("Server ping (id=%s) responded with error: %s", id, error_msg);
-            free(error_msg);
+    // show warning if error
+    char *error_msg = stanza_get_error_message(stanza);
+    log_warning("Server ping (id=%s) responded with error: %s", id, error_msg);
+    free(error_msg);
 
-            // turn off autoping if error type is 'cancel'
-            xmpp_stanza_t *error = xmpp_stanza_get_child_by_name(stanza, STANZA_NAME_ERROR);
-            if (error) {
-                char *errtype = xmpp_stanza_get_type(error);
-                if (errtype) {
-                    if (strcmp(errtype, "cancel") == 0) {
-                        log_warning("Server ping (id=%s) error type 'cancel', disabling autoping.", id);
-                        prefs_set_autoping(0);
-                        cons_show_error("Server ping not supported, autoping disabled.");
-                        xmpp_timed_handler_delete(conn, _ping_timed_handler);
-                    }
-                }
-            }
-        }
+    // turn off autoping if error type is 'cancel'
+    xmpp_stanza_t *error = xmpp_stanza_get_child_by_name(stanza, STANZA_NAME_ERROR);
+    if (error == NULL) {
+        return 0;
+    }
+    char *errtype = xmpp_stanza_get_type(error);
+    if (errtype == NULL) {
+        return 0;
+    }
+    if (g_strcmp0(errtype, "cancel") == 0) {
+        log_warning("Server ping (id=%s) error type 'cancel', disabling autoping.", id);
+        prefs_set_autoping(0);
+        cons_show_error("Server ping not supported, autoping disabled.");
+        xmpp_timed_handler_delete(conn, _autoping_timed_handler);
     }
 
-    // remove this handler
     return 0;
 }
 
@@ -839,21 +873,29 @@ _manual_pong_handler(xmpp_conn_t *const conn, xmpp_stanza_t *const stanza,
 }
 
 static int
-_ping_timed_handler(xmpp_conn_t *const conn, void *const userdata)
+_autoping_timed_handler(xmpp_conn_t *const conn, void *const userdata)
 {
-    xmpp_ctx_t *ctx = (xmpp_ctx_t *)userdata;
-
-    if (jabber_get_connection_status() == JABBER_CONNECTED) {
-
-        xmpp_stanza_t *iq = stanza_create_ping_iq(ctx, NULL);
-        char *id = xmpp_stanza_get_id(iq);
-
-        // add pong handler
-        xmpp_id_handler_add(conn, _pong_handler, id, ctx);
-
-        xmpp_send(conn, iq);
-        xmpp_stanza_release(iq);
+    if (jabber_get_connection_status() != JABBER_CONNECTED) {
+        return 1;
     }
+
+    if (autoping_wait) {
+        log_debug("Autoping: Existing ping already in progress, aborting");
+        return 1;
+    }
+
+    xmpp_ctx_t *ctx = (xmpp_ctx_t *)userdata;
+    xmpp_stanza_t *iq = stanza_create_ping_iq(ctx, NULL);
+    char *id = xmpp_stanza_get_id(iq);
+    log_debug("Autoping: Sending ping request: %s", id);
+
+    // add pong handler
+    xmpp_id_handler_add(conn, _auto_pong_handler, id, ctx);
+
+    xmpp_send(conn, iq);
+    xmpp_stanza_release(iq);
+    autoping_wait = TRUE;
+    autoping_time = g_timer_new();
 
     return 1;
 }
