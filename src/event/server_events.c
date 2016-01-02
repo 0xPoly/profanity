@@ -265,6 +265,8 @@ sv_ev_room_message(const char *const room_jid, const char *const nick,
         }
     }
 
+    rosterwin_roster();
+
     // don't notify self messages
     if (strcmp(nick, my_nick) == 0) {
         return;
@@ -290,8 +292,6 @@ sv_ev_room_message(const char *const room_jid, const char *const nick,
         notify_room_message(nick, jidp->localpart, ui_index, NULL);
     }
     jid_destroy(jidp);
-
-    rosterwin_roster();
 
     plugins_post_room_message_display(room_jid, nick, new_message);
     free(new_message);
